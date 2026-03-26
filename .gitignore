@@ -36,3 +36,4 @@ package_docs/
 # Local MCP and Claude config (user-specific paths)
 .mcp.json
 CLAUDE.md
+.claude/
