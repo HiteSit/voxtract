@@ -237,13 +237,13 @@ async def list_transcriptions(ctx: Context) -> str:
     },
 )
 async def read_transcription(
-    filename: str, ctx: Context, format: str = "txt"
+    filename: str, ctx: Context, format: str = "md"
 ) -> str:
     """Read a specific transcription result.
 
     Args:
         filename: Filename relative to output/ (e.g. 'Example.md' or 'batch/call.json').
-        format: 'txt' for plain text or 'json' for full structured output.
+        format: 'md' for markdown transcript or 'json' for full structured output.
     """
     wd = await _get_workdir(ctx)
 
@@ -400,48 +400,60 @@ async def transcribe_batch(
 
 
 # ---------------------------------------------------------------------------
+# Tools: Post-processing
+# ---------------------------------------------------------------------------
+
+@server.tool(
+    name="mistral_save_processed",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def save_processed(
+    filename: str, content: str, ctx: Context
+) -> str:
+    """Save a processed (cleaned) transcript to output/.
+
+    Writes the content as a *_clean.md file alongside the original transcription.
+
+    Args:
+        filename: Original transcription filename relative to output/
+                  (e.g. 'Example.md' or 'Example'). The '_clean' suffix is added automatically.
+        content: The cleaned markdown content to save.
+    """
+    wd = await _get_workdir(ctx)
+
+    # Normalise: strip known suffixes so we always build from the stem
+    name = Path(filename).with_suffix("").name
+    if name.endswith("_clean"):
+        name = name[: -len("_clean")]
+
+    # Preserve subdirectory structure
+    parent = Path(filename).parent
+    clean_path = wd.output_dir / parent / f"{name}_clean.md"
+    clean_path.parent.mkdir(parents=True, exist_ok=True)
+    clean_path.write_text(content)
+
+    return f"Saved processed transcript: {clean_path}"
+
+
+# ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
 @server.prompt(
     name="clean_transcript",
     description=(
-        "Clean a transcript: remove filler words, fix grammar, "
-        "produce readable text while preserving meaning."
+        "Clean a raw transcript: remove filler words, fix grammar and logic flow, "
+        "restructure for clarity while preserving meaning and speaker headings. "
+        "After the LLM produces the cleaned text, save it with mistral_save_processed."
     ),
 )
 def clean_transcript(transcript: str) -> list[dict]:
     return prompts.clean_transcript_messages(transcript)
-
-
-@server.prompt(
-    name="meeting_notes",
-    description=(
-        "Structure a transcript into meeting notes with attendees, "
-        "topics, decisions, and action items."
-    ),
-)
-def meeting_notes(transcript: str) -> list[dict]:
-    return prompts.meeting_notes_messages(transcript)
-
-
-@server.prompt(
-    name="summarize_transcript",
-    description="Create a concise summary of a transcript with key points by topic.",
-)
-def summarize_transcript(transcript: str) -> list[dict]:
-    return prompts.summarize_transcript_messages(transcript)
-
-
-@server.prompt(
-    name="technical_notes",
-    description=(
-        "Extract technical content from a transcript into structured notes "
-        "with terms, concepts, tools, and methodologies."
-    ),
-)
-def technical_notes(transcript: str) -> list[dict]:
-    return prompts.technical_notes_messages(transcript)
 
 
 # ---------------------------------------------------------------------------
