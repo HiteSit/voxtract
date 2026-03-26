@@ -76,11 +76,23 @@ The idea is simple: add Voxtract to any repository where you work. Got an idea w
 
 ## Installation
 
-No cloning, no setup. Just add it to your MCP client configuration.
+No cloning, no setup. Requires [uv](https://docs.astral.sh/uv/) and a [Mistral API key](https://console.mistral.ai/) (pay-per-use, no subscription).
 
-Requires [uv](https://docs.astral.sh/uv/) and a [Mistral API key](https://console.mistral.ai/) (pay-per-use, no subscription).
+<details>
+<summary><strong>Claude Code (CLI)</strong></summary>
 
-Add this to your MCP config (e.g., `.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude Desktop, or equivalent for your client):
+```bash
+claude mcp add --env MISTRAL_API_KEY="your-key-here" voxtract -- uvx --from git+https://github.com/hitesit/voxtract voxtract
+```
+
+One command. Done.
+
+</details>
+
+<details>
+<summary><strong>Any MCP client (manual JSON config)</strong></summary>
+
+Add this to your MCP config (`.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude Desktop, or equivalent for Cursor, Windsurf, etc.):
 
 ```json
 {
@@ -97,7 +109,9 @@ Add this to your MCP config (e.g., `.mcp.json` for Claude Code, `claude_desktop_
 }
 ```
 
-That's it. `uvx` downloads, installs, and runs Voxtract in an isolated environment automatically.
+</details>
+
+`uvx` downloads, installs, and runs Voxtract in an isolated environment automatically.
 
 ## Quick start
 
