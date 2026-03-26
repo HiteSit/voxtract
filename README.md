@@ -70,6 +70,35 @@ Some ideas for what you could build:
 
 Since the LLM you already use is the post-processing engine, each new use case costs you **zero extra** — just a new prompt function.
 
+## Tools & Prompts
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `mistral_set_workdir` | Set the work directory. Creates `inbox/` and `.staging/` |
+| `mistral_get_workdir` | Show current workdir path and status counts |
+| `mistral_set_language` | Set transcription language (e.g. `italian`, `fr`). Non-English auto-disables timestamps |
+| `mistral_get_language` | Show current language and timestamp status |
+| `mistral_set_context_bias` | Set domain-specific terms for transcription accuracy (max 100) |
+| `mistral_get_context_bias` | Show configured bias terms |
+| `mistral_clear_context_bias` | Clear all bias terms |
+| `mistral_list_inbox` | List audio files waiting in `inbox/` |
+| `mistral_create_session` | Stage inbox files into a transcription session |
+| `mistral_list_sessions` | List active staging sessions and their status |
+| `mistral_transcribe` | Transcribe all audio files in a session (with diarization) |
+| `mistral_read_staging_transcript` | Read merged transcript from staging before naming |
+| `mistral_finalize` | Finalize session into a named directory with `transcript.md` |
+| `mistral_list_recordings` | List all finalized recording directories |
+| `mistral_read_transcript` | Read transcript (raw or clean) from a recording |
+| `mistral_save_processed` | Save post-processed text as `transcript_clean.md` |
+
+### Prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `clean_transcript` | Remove filler words, fix grammar and logic flow, restructure for clarity while preserving meaning and speaker headings |
+
 ## Use it everywhere
 
 The idea is simple: add Voxtract to any repository where you work. Got an idea while walking? Record it, drop the file, and get structured documentation — right next to your code, notes, or research.
