@@ -1,10 +1,12 @@
 """Tests for the transcriber module."""
 
+import os
+import re
 from pathlib import Path
 
 import pytest
 
-from mistral_voice_mcp.transcriber import MODEL_ID, transcribe
+from mistral_voice_mcp.transcriber import MODEL_ID, _segments_to_markdown, transcribe
 from mistral_voice_mcp.workdir import WorkDirectory
 
 
@@ -40,13 +42,16 @@ class TestTranscribe:
         assert result.json_path.suffix == ".json"
 
     @pytest.mark.asyncio
-    async def test_saves_txt_output(self, wd_with_file, mock_mistral_client):
+    async def test_saves_md_output(self, wd_with_file, mock_mistral_client):
         wd, audio = wd_with_file
         result = await transcribe(mock_mistral_client, wd, audio)
 
-        assert result.txt_path is not None
-        assert result.txt_path.exists()
-        assert result.txt_path.read_text() == "Transcribed text content."
+        assert result.md_path is not None
+        assert result.md_path.exists()
+        assert result.md_path.suffix == ".md"
+        content = result.md_path.read_text()
+        assert "## Speaker 1" in content
+        assert "Transcribed text content." in content
 
     @pytest.mark.asyncio
     async def test_context_bias_forwarded(
@@ -98,3 +103,101 @@ class TestTranscribe:
         result = await transcribe(mock_mistral_client, wd, audio)
         assert "batch" in str(result.json_path)
         assert "day1" in str(result.json_path)
+
+
+class TestSegmentsToMarkdown:
+    def test_empty_segments(self):
+        assert _segments_to_markdown([]) == ""
+
+    def test_single_speaker_concatenation(self):
+        segments = [
+            {"text": "Hello there.", "start": 0.0, "end": 2.0, "speaker_id": "speaker_1"},
+            {"text": "How are you?", "start": 2.5, "end": 4.0, "speaker_id": "speaker_1"},
+        ]
+        md = _segments_to_markdown(segments)
+        assert md.count("## Speaker 1") == 1
+        assert "Hello there. How are you?" in md
+
+    def test_multiple_speakers_alternate(self):
+        segments = [
+            {"text": "Hi.", "start": 0.0, "end": 1.0, "speaker_id": "speaker_1"},
+            {"text": "Hey!", "start": 1.5, "end": 2.0, "speaker_id": "speaker_2"},
+            {"text": "What's up?", "start": 2.5, "end": 3.0, "speaker_id": "speaker_1"},
+        ]
+        md = _segments_to_markdown(segments)
+        assert md.count("## Speaker 1") == 2
+        assert md.count("## Speaker 2") == 1
+        headings = re.findall(r"## (Speaker \d)", md)
+        assert headings == ["Speaker 1", "Speaker 2", "Speaker 1"]
+
+    def test_speaker_returns_after_other(self):
+        segments = [
+            {"text": "A", "start": 0.0, "end": 1.0, "speaker_id": "speaker_1"},
+            {"text": "B", "start": 1.0, "end": 2.0, "speaker_id": "speaker_1"},
+            {"text": "C", "start": 2.0, "end": 3.0, "speaker_id": "speaker_2"},
+            {"text": "D", "start": 3.0, "end": 4.0, "speaker_id": "speaker_1"},
+        ]
+        md = _segments_to_markdown(segments)
+        assert "A B" in md
+        assert "C" in md
+        assert "D" in md
+
+    def test_missing_speaker_id(self):
+        segments = [
+            {"text": "No speaker.", "start": 0.0, "end": 1.0},
+        ]
+        md = _segments_to_markdown(segments)
+        assert "## Unknown" in md
+
+
+@pytest.mark.integration
+class TestTranscribeEndToEnd:
+    """End-to-end test using real Mistral API and the Example.mpeg fixture.
+
+    Run with: uv run pytest -m integration
+    """
+
+    @pytest.mark.asyncio
+    async def test_transcribe_produces_valid_markdown(
+        self, workdir_with_audio: Path
+    ):
+        from mistralai.client import Mistral
+
+        api_key = os.environ.get("MISTRAL_API_KEY")
+        if not api_key:
+            pytest.skip("MISTRAL_API_KEY not set")
+
+        client = Mistral(api_key=api_key)
+        wd = WorkDirectory(workdir_with_audio)
+        audio = wd.input_dir / "Example.mpeg"
+
+        result = await transcribe(client, wd, audio)
+
+        # JSON output exists and is valid
+        assert result.json_path is not None
+        assert result.json_path.exists()
+        assert result.json_path.suffix == ".json"
+
+        # Markdown output exists
+        assert result.md_path is not None
+        assert result.md_path.exists()
+        assert result.md_path.suffix == ".md"
+
+        md_content = result.md_path.read_text()
+
+        # Has at least one speaker heading
+        headings = re.findall(r"^## .+$", md_content, re.MULTILINE)
+        assert len(headings) >= 1, "Markdown must have at least one speaker heading"
+
+        # Every heading matches the expected format
+        for h in headings:
+            assert re.match(r"## Speaker \d+", h), f"Unexpected heading format: {h}"
+
+        # Content is non-empty between headings
+        blocks = re.split(r"^## .+$", md_content, flags=re.MULTILINE)
+        non_empty_blocks = [b.strip() for b in blocks if b.strip()]
+        assert len(non_empty_blocks) >= 1, "Must have text content under headings"
+
+        # No .txt file produced
+        txt_path = result.md_path.with_suffix(".txt")
+        assert not txt_path.exists(), ".txt file should not be generated"

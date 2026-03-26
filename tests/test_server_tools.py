@@ -99,25 +99,25 @@ class TestInputOutputTools:
         self, workdir: Path, mock_ctx
     ):
         (workdir / "output" / "test.json").write_text('{"text":"hello"}')
-        (workdir / "output" / "test.txt").write_text("hello")
+        (workdir / "output" / "test.md").write_text("## Speaker 1\n\nhello\n")
         await set_workdir(str(workdir), mock_ctx)
         result = await list_transcriptions(mock_ctx)
         assert "1 transcription" in result
-        assert "[+txt]" in result
+        assert "[+md]" in result
 
     @pytest.mark.asyncio
     async def test_read_transcription(self, workdir: Path, mock_ctx):
-        (workdir / "output" / "test.txt").write_text("Hello world")
+        (workdir / "output" / "test.md").write_text("## Speaker 1\n\nHello world\n")
         await set_workdir(str(workdir), mock_ctx)
-        result = await read_transcription("test.txt", mock_ctx)
-        assert result == "Hello world"
+        result = await read_transcription("test.md", mock_ctx)
+        assert "Hello world" in result
 
     @pytest.mark.asyncio
     async def test_read_transcription_not_found(
         self, workdir: Path, mock_ctx
     ):
         await set_workdir(str(workdir), mock_ctx)
-        result = await read_transcription("nonexistent.txt", mock_ctx)
+        result = await read_transcription("nonexistent.md", mock_ctx)
         assert "not found" in result
 
 
@@ -172,7 +172,7 @@ class TestTranscribeFile:
         result = await transcribe_file("test.mp3", mock_ctx)
         assert "Transcription complete" in result
         assert (workdir / "output" / "test.json").exists()
-        assert (workdir / "output" / "test.txt").exists()
+        assert (workdir / "output" / "test.md").exists()
 
 
 @pytest.mark.integration
