@@ -1,5 +1,5 @@
 # Python-generated files
-__pycache__/
+**__pycache__
 *.py[oc]
 build/
 dist/
@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Testing
-.pytest_cache/
+**.pytest_cache
 .coverage
 htmlcov/
 
@@ -26,3 +26,6 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary working directory
+TMP/
