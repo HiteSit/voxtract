@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "mistral-voice": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/home/hitesit/Python_Packages/Mistral_Voice",
+        "mistral-voice-mcp"
+      ],
+      "env": {}
+    }
+  }
+}
