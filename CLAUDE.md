@@ -3,8 +3,8 @@
 ## Aim
 
 MCP server for audio transcription using Mistral's **Voxtral Mini Transcribe 2** (`voxtral-mini-2602`).
-Provides tools for transcribing audio files (single or batch), speaker diarization,
-context biasing for domain-specific terms, and prompt templates for post-processing transcripts.
+Provides a session-based workflow: drop audio in inbox, transcribe to staging, review,
+then finalize into a named recording directory with merged transcript.
 
 ## Environment & Dependency Management
 
@@ -41,9 +41,10 @@ uv run pytest -m integration
 ```
 src/mistral_voice_mcp/
 ├── __init__.py
-├── server.py          # FastMCP server, 12 tools + 1 prompt + 1 resource
+├── server.py          # FastMCP server, 13 tools + 1 prompt + 1 resource
 ├── transcriber.py     # Async Mistral API wrapper
-├── workdir.py         # Work directory manager (input/output mirroring, context bias)
+├── staging.py         # Staging sessions, merge, finalize, slugify
+├── workdir.py         # Work directory manager (inbox, staging, recordings, context bias)
 └── prompts.py         # Prompt templates for post-processing
 ```
 
@@ -52,23 +53,47 @@ src/mistral_voice_mcp/
 - `mistralai` - Official Mistral Python SDK
 - `fastmcp` - FastMCP framework for MCP server
 
+## Workflow
+
+1. `mistral_set_workdir` → creates `inbox/` and `.staging/`
+2. Drop audio files in `inbox/`
+3. `mistral_create_session` → copies files to staging
+4. `mistral_transcribe` → transcribes all files in session
+5. `mistral_read_staging_transcript` → LLM reads transcript, picks a name
+6. `mistral_finalize(session_id, "descriptive name")` → creates named directory, merges transcript, cleans up
+7. (optional) `clean_transcript` prompt + `mistral_save_processed` → writes `transcript_clean.md`
+
+### Output structure
+
+```
+workdir/
+  descriptive-name/
+    audio1.mpeg
+    audio2.mpeg           (if multi-file)
+    transcript.md         (merged, with # Part: headers for multi-file)
+    transcript_clean.md   (optional, after cleaning)
+```
+
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `mistral_set_workdir` | Set work directory (creates input/ and output/) |
+| `mistral_set_workdir` | Set work directory (creates inbox/ and .staging/) |
 | `mistral_get_workdir` | Show current workdir and status |
 | `mistral_set_context_bias` | Set terms for transcription accuracy (text or file) |
 | `mistral_get_context_bias` | Show configured bias terms |
 | `mistral_clear_context_bias` | Clear all bias terms |
 | `mistral_set_language` | Set transcription language (auto-disables timestamps for non-English) |
 | `mistral_get_language` | Show current language and timestamp status |
-| `mistral_list_inputs` | List audio files with transcription status |
-| `mistral_transcribe_file` | Transcribe a single file |
-| `mistral_transcribe_batch` | Transcribe all pending files |
-| `mistral_list_transcriptions` | List completed transcriptions |
-| `mistral_read_transcription` | Read a transcription result |
-| `mistral_save_processed` | Save a cleaned/processed transcript as *_clean.md |
+| `mistral_list_inbox` | List audio files in inbox/ |
+| `mistral_create_session` | Stage inbox files for transcription |
+| `mistral_list_sessions` | List active staging sessions |
+| `mistral_transcribe` | Transcribe all files in a staging session |
+| `mistral_read_staging_transcript` | Read merged transcript from staging (before naming) |
+| `mistral_finalize` | Finalize session into named recording directory |
+| `mistral_list_recordings` | List finalized recording directories |
+| `mistral_read_transcript` | Read transcript from a finalized recording |
+| `mistral_save_processed` | Save cleaned transcript as transcript_clean.md |
 
 ## Prompts
 
