@@ -8,6 +8,12 @@ from fastmcp import FastMCP, Context
 from mistralai.client import Mistral
 
 from mistral_voice_mcp import prompts
+from mistral_voice_mcp.staging import (
+    StagingSession,
+    create_session,
+    get_session,
+    list_sessions,
+)
 from mistral_voice_mcp.transcriber import transcribe, MODEL_ID
 from mistral_voice_mcp.workdir import AUDIO_EXTENSIONS, WorkDirectory
 
@@ -16,7 +22,7 @@ server = FastMCP(
     instructions=(
         "Audio transcription server using Mistral Voxtral Mini Transcribe 2. "
         "Set a work directory first with mistral_set_workdir, then place audio "
-        "files in the input/ subdirectory. Supported formats: "
+        "files in the inbox/ subdirectory. Supported formats: "
         f"{', '.join(sorted(AUDIO_EXTENSIONS))}."
     ),
 )
@@ -105,16 +111,16 @@ async def _get_language(ctx: Context) -> str:
     },
 )
 async def set_workdir(path: str, ctx: Context) -> str:
-    """Set the work directory for transcription. Creates input/ and output/ subdirectories if needed."""
+    """Set the work directory for transcription. Creates inbox/ and .staging/ subdirectories if needed."""
     resolved = Path(path).expanduser().resolve()
     wd = WorkDirectory(resolved)
     await ctx.set_state("workdir_path", str(wd.root))
     s = wd.status()
     return (
         f"Work directory set to: {wd.root}\n"
-        f"  input/  : {s['total_inputs']} audio files\n"
-        f"  output/ : {s['transcribed']} transcriptions\n"
-        f"  pending : {s['pending']} files to transcribe"
+        f"  inbox/      : {s['inbox']} audio files\n"
+        f"  staging     : {s['staging']} sessions\n"
+        f"  recordings  : {s['recordings']} finalized"
     )
 
 
@@ -134,9 +140,9 @@ async def get_workdir(ctx: Context) -> str:
     bias = wd.load_context_bias()
     return (
         f"Work directory: {wd.root}\n"
-        f"  input/  : {s['total_inputs']} audio files\n"
-        f"  output/ : {s['transcribed']} transcriptions\n"
-        f"  pending : {s['pending']} files to transcribe\n"
+        f"  inbox/      : {s['inbox']} audio files\n"
+        f"  staging     : {s['staging']} sessions\n"
+        f"  recordings  : {s['recordings']} finalized\n"
         f"  context bias: {len(bias)} terms"
     )
 
@@ -275,11 +281,11 @@ async def get_language(ctx: Context) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tools: Input / Output Listing
+# Tools: Inbox
 # ---------------------------------------------------------------------------
 
 @server.tool(
-    name="mistral_list_inputs",
+    name="mistral_list_inbox",
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
@@ -287,79 +293,120 @@ async def get_language(ctx: Context) -> str:
         "openWorldHint": False,
     },
 )
-async def list_inputs(ctx: Context) -> str:
-    """List audio files in input/ (recursive), showing transcription status."""
+async def list_inbox(ctx: Context) -> str:
+    """List audio files in inbox/ waiting to be transcribed."""
     wd = await _get_workdir(ctx)
-    files = wd.scan_inputs()
+    files = wd.scan_inbox()
     if not files:
-        return "No audio files found in input/."
+        return "No audio files found in inbox/."
 
-    lines = [f"Found {len(files)} audio files:\n"]
+    lines = [f"Found {len(files)} audio files in inbox/:\n"]
     for f in files:
-        rel = f.relative_to(wd.input_dir)
-        status = "done" if wd.is_transcribed(f) else "pending"
-        lines.append(f"  [{status}] {rel}")
-    return "\n".join(lines)
-
-
-@server.tool(
-    name="mistral_list_transcriptions",
-    annotations={
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-)
-async def list_transcriptions(ctx: Context) -> str:
-    """List completed transcriptions in output/."""
-    wd = await _get_workdir(ctx)
-    json_files = sorted(wd.output_dir.rglob("*.json"))
-    if not json_files:
-        return "No transcriptions found in output/."
-
-    lines = [f"Found {len(json_files)} transcriptions:\n"]
-    for f in json_files:
-        rel = f.relative_to(wd.output_dir)
+        rel = f.relative_to(wd.inbox_dir)
         size_kb = f.stat().st_size / 1024
-        md_exists = f.with_suffix(".md").exists()
-        lines.append(
-            f"  {rel} ({size_kb:.1f} KB)"
-            + (" [+md]" if md_exists else "")
-        )
+        lines.append(f"  {rel} ({size_kb:.1f} KB)")
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Tools: Staging Sessions
+# ---------------------------------------------------------------------------
+
 @server.tool(
-    name="mistral_read_transcription",
+    name="mistral_create_session",
     annotations={
-        "readOnlyHint": True,
+        "readOnlyHint": False,
         "destructiveHint": False,
-        "idempotentHint": True,
+        "idempotentHint": False,
         "openWorldHint": False,
     },
 )
-async def read_transcription(
-    filename: str, ctx: Context, format: str = "md"
+async def create_session_tool(
+    ctx: Context, filenames: list[str] | None = None
 ) -> str:
-    """Read a specific transcription result.
+    """Create a staging session from audio files in inbox/.
+
+    Copies the specified files (or all inbox files) into a staging session
+    for transcription.
 
     Args:
-        filename: Filename relative to output/ (e.g. 'Example.md' or 'batch/call.json').
-        format: 'md' for markdown transcript or 'json' for full structured output.
+        filenames: List of filenames in inbox/ to include. None means all files.
     """
     wd = await _get_workdir(ctx)
 
-    # Resolve the file, allowing user to omit the extension
-    candidate = wd.output_dir / filename
-    if not candidate.exists():
-        candidate = wd.output_dir / Path(filename).with_suffix(
-            f".{format}"
-        )
-    if not candidate.exists():
-        return f"Transcription not found: {filename}"
+    if filenames:
+        audio_paths = []
+        for name in filenames:
+            path = wd.inbox_dir / name
+            if not path.exists():
+                return f"File not found in inbox: {name}"
+            audio_paths.append(path)
+    else:
+        audio_paths = wd.scan_inbox()
+        if not audio_paths:
+            return "No audio files in inbox/."
 
-    return candidate.read_text()
+    session = create_session(wd.root, audio_paths)
+    file_list = "\n".join(f"  - {p.name}" for p in session.audio_files)
+    return (
+        f"Session created: {session.session_id}\n"
+        f"  Files: {len(session.audio_files)}\n"
+        f"{file_list}"
+    )
+
+
+@server.tool(
+    name="mistral_list_sessions",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def list_sessions_tool(ctx: Context) -> str:
+    """List active staging sessions."""
+    wd = await _get_workdir(ctx)
+    sessions = list_sessions(wd.root)
+    if not sessions:
+        return "No active staging sessions."
+
+    lines = [f"Found {len(sessions)} staging sessions:\n"]
+    for s in sessions:
+        n_audio = len(s.audio_files)
+        transcribed = s.is_fully_transcribed()
+        status = "transcribed" if transcribed else "pending"
+        lines.append(f"  {s.session_id} — {n_audio} files [{status}]")
+    return "\n".join(lines)
+
+
+@server.tool(
+    name="mistral_read_staging_transcript",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def read_staging_transcript(session_id: str, ctx: Context) -> str:
+    """Read the merged transcript from a staging session.
+
+    Use this to review the transcript before finalizing with a name.
+
+    Args:
+        session_id: The staging session ID.
+    """
+    wd = await _get_workdir(ctx)
+    session = get_session(wd.root, session_id)
+
+    if not session.is_fully_transcribed():
+        return f"Session {session_id} is not fully transcribed yet."
+
+    merged = session.merge_transcripts()
+    if not merged:
+        return f"No transcripts found in session {session_id}."
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +414,7 @@ async def read_transcription(
 # ---------------------------------------------------------------------------
 
 @server.tool(
-    name="mistral_transcribe_file",
+    name="mistral_transcribe",
     annotations={
         "readOnlyHint": False,
         "destructiveHint": False,
@@ -375,131 +422,62 @@ async def read_transcription(
         "openWorldHint": True,
     },
 )
-async def transcribe_file(
-    filename: str,
+async def transcribe_session(
+    session_id: str,
     ctx: Context,
     diarize: bool = True,
     timestamp_granularity: str = "segment",
 ) -> str:
-    """Transcribe a single audio file from input/.
+    """Transcribe all audio files in a staging session.
 
     Uses the session language set via mistral_set_language (default: English).
-    When language is non-English, timestamps are automatically disabled.
 
     Args:
-        filename: Path relative to input/ (e.g. 'Example.mpeg' or 'batch/call.mp3').
+        session_id: The staging session ID.
         diarize: Enable speaker identification.
         timestamp_granularity: 'segment' or 'word' level timestamps (ignored for non-English).
     """
     wd = await _get_workdir(ctx)
     client = _get_client()
+    session = get_session(wd.root, session_id)
 
-    input_path = wd.input_dir / filename
-    if not input_path.exists():
-        return f"File not found: {input_path}"
-
-    bias = wd.load_context_bias() or None
-    lang_code = await _get_language(ctx)
-    # English uses timestamps; non-English uses language param instead
-    language = None if lang_code == DEFAULT_LANGUAGE else lang_code
-
-    await ctx.info(f"Transcribing {filename} (lang={lang_code})...")
-    result = await transcribe(
-        client,
-        wd,
-        input_path,
-        diarize=diarize,
-        timestamp_granularity=timestamp_granularity,
-        context_bias=bias,
-        language=language,
-    )
-
-    n_segments = len(result.segments)
-    speakers = {s.get("speaker_id") for s in result.segments if s.get("speaker_id")}
-
-    return (
-        f"Transcription complete: {filename}\n"
-        f"  Model: {result.model}\n"
-        f"  Language: {lang_code}\n"
-        f"  Text length: {len(result.text)} chars\n"
-        f"  Segments: {n_segments}\n"
-        f"  Speakers: {len(speakers) if speakers else 'N/A'}\n"
-        f"  Timestamps: {'enabled' if language is None else 'disabled'}\n"
-        f"  Saved: {result.json_path}\n"
-        f"          {result.md_path}"
-    )
-
-
-@server.tool(
-    name="mistral_transcribe_batch",
-    annotations={
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-)
-async def transcribe_batch(
-    ctx: Context,
-    subdirectory: str | None = None,
-    force: bool = False,
-    diarize: bool = True,
-    timestamp_granularity: str = "segment",
-) -> str:
-    """Transcribe all untranscribed audio files in input/ (or a subdirectory).
-
-    Uses the session language set via mistral_set_language (default: English).
-
-    Args:
-        subdirectory: Optional subdirectory within input/ to scope the batch.
-        force: Re-transcribe files that already have output.
-        diarize: Enable speaker identification.
-        timestamp_granularity: 'segment' or 'word' level timestamps (ignored for non-English).
-    """
-    wd = await _get_workdir(ctx)
-    client = _get_client()
-
-    if force:
-        files = wd.scan_inputs()
-    else:
-        files = wd.pending_files()
-
-    if subdirectory:
-        sub_path = wd.input_dir / subdirectory
-        files = [f for f in files if str(f).startswith(str(sub_path))]
-
+    files = session.audio_files
     if not files:
-        return "No files to transcribe."
+        return f"No audio files in session {session_id}."
 
     bias = wd.load_context_bias() or None
     lang_code = await _get_language(ctx)
     language = None if lang_code == DEFAULT_LANGUAGE else lang_code
+
     total = len(files)
     results: list[str] = []
     errors: list[str] = []
 
-    for i, f in enumerate(files):
-        rel = f.relative_to(wd.input_dir)
+    for i, audio in enumerate(files):
         await ctx.report_progress(i, total)
-        await ctx.info(f"Transcribing [{i + 1}/{total}] {rel} (lang={lang_code})")
+        await ctx.info(f"Transcribing [{i + 1}/{total}] {audio.name} (lang={lang_code})")
 
         try:
             await transcribe(
                 client,
-                wd,
-                f,
+                audio,
+                session.session_dir,
                 diarize=diarize,
                 timestamp_granularity=timestamp_granularity,
                 context_bias=bias,
                 language=language,
             )
-            results.append(str(rel))
+            results.append(audio.name)
         except Exception as e:
-            errors.append(f"{rel}: {e}")
+            errors.append(f"{audio.name}: {e}")
 
     await ctx.report_progress(total, total)
 
-    lines = [f"Batch transcription complete: {len(results)}/{total} succeeded"]
+    lines = [
+        f"Transcription complete: {len(results)}/{total} files",
+        f"  Session: {session_id}",
+        f"  Language: {lang_code}",
+    ]
     if results:
         lines.append("\nCompleted:")
         lines.extend(f"  - {r}" for r in results)
@@ -508,6 +486,127 @@ async def transcribe_batch(
         lines.extend(f"  - {e}" for e in errors)
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Tools: Finalize
+# ---------------------------------------------------------------------------
+
+@server.tool(
+    name="mistral_finalize",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+async def finalize_session(
+    session_id: str, name: str, ctx: Context
+) -> str:
+    """Finalize a staging session into a named recording directory.
+
+    Creates a directory under workdir with the given name (slugified),
+    moves audio files into it, writes the merged transcript.md,
+    and cleans up the staging session and inbox originals.
+
+    Args:
+        session_id: The staging session ID.
+        name: A descriptive name for the recording (will be slugified).
+    """
+    wd = await _get_workdir(ctx)
+    session = get_session(wd.root, session_id)
+
+    if not session.is_fully_transcribed():
+        return f"Session {session_id} is not fully transcribed yet."
+
+    # Remember inbox files to clean up after finalize
+    inbox_names = {p.name for p in session.audio_files}
+
+    try:
+        final_dir = session.finalize(name)
+    except ValueError as e:
+        return str(e)
+
+    # Clean up inbox originals
+    for inbox_file in wd.inbox_dir.iterdir():
+        if inbox_file.name in inbox_names:
+            inbox_file.unlink()
+
+    contents = sorted(p.name for p in final_dir.iterdir())
+    file_list = "\n".join(f"  - {c}" for c in contents)
+    return (
+        f"Finalized: {final_dir.name}/\n"
+        f"  Path: {final_dir}\n"
+        f"  Contents:\n{file_list}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tools: Recordings
+# ---------------------------------------------------------------------------
+
+@server.tool(
+    name="mistral_list_recordings",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def list_recordings(ctx: Context) -> str:
+    """List finalized recording directories."""
+    wd = await _get_workdir(ctx)
+    recordings = wd.scan_recordings()
+    if not recordings:
+        return "No finalized recordings."
+
+    lines = [f"Found {len(recordings)} recordings:\n"]
+    for d in recordings:
+        audio = [p.name for p in d.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS]
+        has_transcript = (d / "transcript.md").exists()
+        has_clean = (d / "transcript_clean.md").exists()
+        status = []
+        if has_transcript:
+            status.append("transcript")
+        if has_clean:
+            status.append("clean")
+        lines.append(
+            f"  {d.name}/ — {len(audio)} audio, [{', '.join(status)}]"
+        )
+    return "\n".join(lines)
+
+
+@server.tool(
+    name="mistral_read_transcript",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def read_transcript(
+    recording: str, ctx: Context, clean: bool = False
+) -> str:
+    """Read a transcript from a finalized recording.
+
+    Args:
+        recording: Recording directory name (e.g. 'orca-software-dft').
+        clean: If True, read transcript_clean.md instead of transcript.md.
+    """
+    wd = await _get_workdir(ctx)
+    rec_dir = wd.root / recording
+    if not rec_dir.is_dir():
+        return f"Recording not found: {recording}"
+
+    filename = "transcript_clean.md" if clean else "transcript.md"
+    path = rec_dir / filename
+    if not path.exists():
+        return f"File not found: {recording}/{filename}"
+
+    return path.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -524,31 +623,25 @@ async def transcribe_batch(
     },
 )
 async def save_processed(
-    filename: str, content: str, ctx: Context
+    recording: str, content: str, ctx: Context
 ) -> str:
-    """Save a processed (cleaned) transcript to output/.
+    """Save a cleaned transcript into a finalized recording directory.
 
-    Writes the content as a *_clean.md file alongside the original transcription.
+    Writes the content as transcript_clean.md.
 
     Args:
-        filename: Original transcription filename relative to output/
-                  (e.g. 'Example.md' or 'Example'). The '_clean' suffix is added automatically.
+        recording: Recording directory name (e.g. 'orca-software-dft').
         content: The cleaned markdown content to save.
     """
     wd = await _get_workdir(ctx)
+    rec_dir = wd.root / recording
+    if not rec_dir.is_dir():
+        return f"Recording not found: {recording}"
 
-    # Normalise: strip known suffixes so we always build from the stem
-    name = Path(filename).with_suffix("").name
-    if name.endswith("_clean"):
-        name = name[: -len("_clean")]
-
-    # Preserve subdirectory structure
-    parent = Path(filename).parent
-    clean_path = wd.output_dir / parent / f"{name}_clean.md"
-    clean_path.parent.mkdir(parents=True, exist_ok=True)
+    clean_path = rec_dir / "transcript_clean.md"
     clean_path.write_text(content)
 
-    return f"Saved processed transcript: {clean_path}"
+    return f"Saved cleaned transcript: {clean_path}"
 
 
 # ---------------------------------------------------------------------------
