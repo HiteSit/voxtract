@@ -6,8 +6,6 @@ from pathlib import Path
 
 from mistralai.client import Mistral
 
-from mistral_voice_mcp.workdir import WorkDirectory
-
 MODEL_ID: str = "voxtral-mini-2602"
 
 
@@ -55,32 +53,28 @@ def _segments_to_markdown(segments: list[dict]) -> str:
 
 async def transcribe(
     client: Mistral,
-    workdir: WorkDirectory,
     input_path: Path,
+    output_dir: Path,
     *,
     diarize: bool = True,
     timestamp_granularity: str = "segment",
     context_bias: list[str] | None = None,
     language: str | None = None,
 ) -> TranscriptionResult:
-    """Transcribe a single audio file and save results to output/.
+    """Transcribe a single audio file and save results.
 
     Args:
         client: Mistral API client.
-        workdir: Work directory managing input/output paths.
-        input_path: Path to audio file (must be within workdir.input_dir).
+        input_path: Path to audio file.
+        output_dir: Directory where .json and .md output will be written.
         diarize: Enable speaker diarization.
         timestamp_granularity: "segment" or "word" level timestamps.
         context_bias: List of terms to guide transcription spelling.
         language: Language code (mutually exclusive with timestamps).
     """
     input_path = Path(input_path).resolve()
-    try:
-        input_path.relative_to(workdir.input_dir)
-    except ValueError:
-        raise ValueError(
-            f"File {input_path} is not within the input directory {workdir.input_dir}"
-        )
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     kwargs: dict = {
         "model": MODEL_ID,
@@ -105,8 +99,10 @@ async def transcribe(
         kwargs["file"] = {"content": f, "file_name": input_path.name}
         response = await client.audio.transcriptions.complete_async(**kwargs)
 
+    stem = input_path.stem
+
     # Save JSON output
-    json_path = workdir.get_output_path(input_path, suffix=".json")
+    json_path = output_dir / f"{stem}.json"
     json_path.write_text(
         json.dumps(response.model_dump(), indent=2, default=str)
     )
@@ -123,7 +119,7 @@ async def transcribe(
     ]
 
     # Save markdown with speaker-grouped conversation format
-    md_path = workdir.get_output_path(input_path, suffix=".md")
+    md_path = output_dir / f"{stem}.md"
     md_path.write_text(_segments_to_markdown(segments))
 
     return TranscriptionResult(
