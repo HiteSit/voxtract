@@ -50,6 +50,47 @@ def _parse_bias_terms(terms: str) -> list[str]:
     return [t.strip() for t in raw.splitlines() if t.strip()]
 
 
+# Mapping of accepted language names/aliases → ISO 639-1 code
+SUPPORTED_LANGUAGES: dict[str, str] = {
+    "english": "en",
+    "en": "en",
+    "chinese": "zh",
+    "zh": "zh",
+    "mandarin": "zh",
+    "hindi": "hi",
+    "hi": "hi",
+    "spanish": "es",
+    "es": "es",
+    "arabic": "ar",
+    "ar": "ar",
+    "french": "fr",
+    "fr": "fr",
+    "portuguese": "pt",
+    "pt": "pt",
+    "russian": "ru",
+    "ru": "ru",
+    "german": "de",
+    "de": "de",
+    "japanese": "ja",
+    "ja": "ja",
+    "korean": "ko",
+    "ko": "ko",
+    "italian": "it",
+    "it": "it",
+    "dutch": "nl",
+    "nl": "nl",
+}
+
+# Default language setting
+DEFAULT_LANGUAGE = "en"
+
+
+async def _get_language(ctx: Context) -> str:
+    """Retrieve the current language code from session state."""
+    lang = await ctx.get_state("language")
+    return lang or DEFAULT_LANGUAGE
+
+
 # ---------------------------------------------------------------------------
 # Tools: Work Directory
 # ---------------------------------------------------------------------------
@@ -172,6 +213,68 @@ async def clear_context_bias(ctx: Context) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tools: Language
+# ---------------------------------------------------------------------------
+
+@server.tool(
+    name="mistral_set_language",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def set_language(language: str, ctx: Context) -> str:
+    """Set the transcription language.
+
+    Default is English with timestamps enabled.
+    Setting a non-English language automatically disables timestamps
+    (Mistral API constraint: language and timestamp_granularities are mutually exclusive).
+
+    Args:
+        language: Language name (e.g. 'italian', 'french') or ISO code (e.g. 'it', 'fr').
+    """
+    key = language.strip().lower()
+    if key not in SUPPORTED_LANGUAGES:
+        available = ", ".join(
+            sorted({v: k for k, v in SUPPORTED_LANGUAGES.items() if len(k) > 2})
+        )
+        return f"Unsupported language: '{language}'. Available: {available}"
+
+    code = SUPPORTED_LANGUAGES[key]
+    await ctx.set_state("language", code)
+
+    if code == DEFAULT_LANGUAGE:
+        return f"Language set to: English (en). Timestamps: enabled."
+    return (
+        f"Language set to: {key} ({code}). Timestamps: disabled "
+        f"(mutually exclusive with language setting)."
+    )
+
+
+@server.tool(
+    name="mistral_get_language",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def get_language(ctx: Context) -> str:
+    """Show current transcription language and whether timestamps are active."""
+    code = await _get_language(ctx)
+    # Reverse-lookup the full name
+    name = next(
+        (k for k, v in SUPPORTED_LANGUAGES.items() if v == code and len(k) > 2),
+        code,
+    )
+    timestamps = "enabled" if code == DEFAULT_LANGUAGE else "disabled"
+    return f"Language: {name} ({code}). Timestamps: {timestamps}."
+
+
+# ---------------------------------------------------------------------------
 # Tools: Input / Output Listing
 # ---------------------------------------------------------------------------
 
@@ -277,15 +380,16 @@ async def transcribe_file(
     ctx: Context,
     diarize: bool = True,
     timestamp_granularity: str = "segment",
-    language: str | None = None,
 ) -> str:
     """Transcribe a single audio file from input/.
+
+    Uses the session language set via mistral_set_language (default: English).
+    When language is non-English, timestamps are automatically disabled.
 
     Args:
         filename: Path relative to input/ (e.g. 'Example.mpeg' or 'batch/call.mp3').
         diarize: Enable speaker identification.
-        timestamp_granularity: 'segment' or 'word' level timestamps.
-        language: Language code (e.g. 'en'). Mutually exclusive with timestamps.
+        timestamp_granularity: 'segment' or 'word' level timestamps (ignored for non-English).
     """
     wd = await _get_workdir(ctx)
     client = _get_client()
@@ -295,8 +399,11 @@ async def transcribe_file(
         return f"File not found: {input_path}"
 
     bias = wd.load_context_bias() or None
+    lang_code = await _get_language(ctx)
+    # English uses timestamps; non-English uses language param instead
+    language = None if lang_code == DEFAULT_LANGUAGE else lang_code
 
-    await ctx.info(f"Transcribing {filename}...")
+    await ctx.info(f"Transcribing {filename} (lang={lang_code})...")
     result = await transcribe(
         client,
         wd,
@@ -313,9 +420,11 @@ async def transcribe_file(
     return (
         f"Transcription complete: {filename}\n"
         f"  Model: {result.model}\n"
+        f"  Language: {lang_code}\n"
         f"  Text length: {len(result.text)} chars\n"
         f"  Segments: {n_segments}\n"
         f"  Speakers: {len(speakers) if speakers else 'N/A'}\n"
+        f"  Timestamps: {'enabled' if language is None else 'disabled'}\n"
         f"  Saved: {result.json_path}\n"
         f"          {result.md_path}"
     )
@@ -336,16 +445,16 @@ async def transcribe_batch(
     force: bool = False,
     diarize: bool = True,
     timestamp_granularity: str = "segment",
-    language: str | None = None,
 ) -> str:
     """Transcribe all untranscribed audio files in input/ (or a subdirectory).
+
+    Uses the session language set via mistral_set_language (default: English).
 
     Args:
         subdirectory: Optional subdirectory within input/ to scope the batch.
         force: Re-transcribe files that already have output.
         diarize: Enable speaker identification.
-        timestamp_granularity: 'segment' or 'word' level timestamps.
-        language: Language code. Mutually exclusive with timestamps.
+        timestamp_granularity: 'segment' or 'word' level timestamps (ignored for non-English).
     """
     wd = await _get_workdir(ctx)
     client = _get_client()
@@ -363,6 +472,8 @@ async def transcribe_batch(
         return "No files to transcribe."
 
     bias = wd.load_context_bias() or None
+    lang_code = await _get_language(ctx)
+    language = None if lang_code == DEFAULT_LANGUAGE else lang_code
     total = len(files)
     results: list[str] = []
     errors: list[str] = []
@@ -370,7 +481,7 @@ async def transcribe_batch(
     for i, f in enumerate(files):
         rel = f.relative_to(wd.input_dir)
         await ctx.report_progress(i, total)
-        await ctx.info(f"Transcribing [{i + 1}/{total}] {rel}")
+        await ctx.info(f"Transcribing [{i + 1}/{total}] {rel} (lang={lang_code})")
 
         try:
             await transcribe(

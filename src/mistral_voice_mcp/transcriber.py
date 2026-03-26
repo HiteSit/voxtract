@@ -87,8 +87,13 @@ async def transcribe(
         "diarize": diarize,
     }
 
-    # timestamp_granularities and language are mutually exclusive
-    if language:
+    # Diarization requires timestamp_granularities=["segment"].
+    # When diarize is on, always include timestamps even with a language set.
+    if diarize:
+        kwargs["timestamp_granularities"] = [timestamp_granularity]
+        if language:
+            kwargs["language"] = language
+    elif language:
         kwargs["language"] = language
     else:
         kwargs["timestamp_granularities"] = [timestamp_granularity]
