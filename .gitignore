@@ -29,3 +29,10 @@ Thumbs.db
 
 # Temporary working directory
 TMP/
+
+# Mistral SDK / API reference docs (not for distribution)
+package_docs/
+
+# Local MCP and Claude config (user-specific paths)
+.mcp.json
+CLAUDE.md
