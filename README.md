@@ -82,10 +82,11 @@ No cloning, no setup. Requires [uv](https://docs.astral.sh/uv/) and a [Mistral A
 <summary><strong>Claude Code (CLI)</strong></summary>
 
 ```bash
-claude mcp add --env MISTRAL_API_KEY="your-key-here" voxtract -- uvx --from git+https://github.com/hitesit/voxtract voxtract
+# Available in all your projects
+claude mcp add --scope user --env MISTRAL_API_KEY="your-key-here" voxtract -- uvx --from git+https://github.com/hitesit/voxtract voxtract
 ```
 
-One command. Done.
+One command. Done. Use `--scope project` instead to limit it to the current project only.
 
 </details>
 
