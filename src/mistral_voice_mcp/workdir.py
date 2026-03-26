@@ -5,73 +5,71 @@ from pathlib import Path
 AUDIO_EXTENSIONS: set[str] = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mpeg"}
 MAX_CONTEXT_BIAS_TERMS: int = 100
 
+# Directories that are part of the internal structure, not recordings
+_RESERVED_DIRS: set[str] = {"inbox", ".staging"}
+
 
 class WorkDirectory:
-    """Manages a work directory with input/ and output/ subdirectories.
+    """Manages a work directory with inbox/, .staging/, and recording directories.
 
-    All audio files go in input/, transcription results in output/.
-    The output structure mirrors the input structure.
+    Users drop audio files in inbox/. Transcription happens in .staging/.
+    Finalized recordings live as named directories under the root.
     """
 
     def __init__(self, path: str | Path) -> None:
         self._root = Path(path).resolve()
         if not self._root.exists():
             self._root.mkdir(parents=True)
-        self.input_dir.mkdir(exist_ok=True)
-        self.output_dir.mkdir(exist_ok=True)
+        self.inbox_dir.mkdir(exist_ok=True)
+        self.staging_dir.mkdir(exist_ok=True)
 
     @property
     def root(self) -> Path:
         return self._root
 
     @property
-    def input_dir(self) -> Path:
-        return self._root / "input"
+    def inbox_dir(self) -> Path:
+        return self._root / "inbox"
 
     @property
-    def output_dir(self) -> Path:
-        return self._root / "output"
+    def staging_dir(self) -> Path:
+        return self._root / ".staging"
 
     @property
     def context_bias_file(self) -> Path:
         return self._root / "context_bias.txt"
 
-    def scan_inputs(self) -> list[Path]:
-        """Return sorted list of audio files in input/ (recursive)."""
+    def scan_inbox(self) -> list[Path]:
+        """Return sorted list of audio files in inbox/ (recursive)."""
         files = [
             p
-            for p in self.input_dir.rglob("*")
+            for p in self.inbox_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
         ]
         return sorted(files)
 
-    def get_output_path(self, input_path: Path, suffix: str = ".json") -> Path:
-        """Mirror input_path into output/, changing the file extension.
+    def scan_recordings(self) -> list[Path]:
+        """Return sorted list of finalized recording directories under root.
 
-        Creates intermediate output subdirectories as needed.
+        Excludes reserved directories (inbox, .staging) and hidden directories.
         """
-        relative = input_path.relative_to(self.input_dir)
-        output_path = self.output_dir / relative.with_suffix(suffix)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return output_path
-
-    def is_transcribed(self, input_path: Path) -> bool:
-        """Check if a .json transcription exists for this input file."""
-        json_path = self.get_output_path(input_path, suffix=".json")
-        return json_path.exists()
-
-    def pending_files(self) -> list[Path]:
-        """Return input files that have no corresponding .json in output/."""
-        return [f for f in self.scan_inputs() if not self.is_transcribed(f)]
+        return sorted(
+            d
+            for d in self._root.iterdir()
+            if d.is_dir() and d.name not in _RESERVED_DIRS and not d.name.startswith(".")
+        )
 
     def status(self) -> dict[str, int]:
-        """Return counts of total inputs, transcribed, and pending files."""
-        all_inputs = self.scan_inputs()
-        transcribed = sum(1 for f in all_inputs if self.is_transcribed(f))
+        """Return counts of inbox files, active staging sessions, and recordings."""
+        inbox = len(self.scan_inbox())
+        staging = len([
+            d for d in self.staging_dir.iterdir() if d.is_dir()
+        ]) if self.staging_dir.exists() else 0
+        recordings = len(self.scan_recordings())
         return {
-            "total_inputs": len(all_inputs),
-            "transcribed": transcribed,
-            "pending": len(all_inputs) - transcribed,
+            "inbox": inbox,
+            "staging": staging,
+            "recordings": recordings,
         }
 
     def load_context_bias(self) -> list[str]:
