@@ -41,7 +41,7 @@ uv run pytest -m integration
 ```
 src/mistral_voice_mcp/
 ├── __init__.py
-├── server.py          # FastMCP server, 10 tools + 4 prompts + 1 resource
+├── server.py          # FastMCP server, 12 tools + 1 prompt + 1 resource
 ├── transcriber.py     # Async Mistral API wrapper
 ├── workdir.py         # Work directory manager (input/output mirroring, context bias)
 └── prompts.py         # Prompt templates for post-processing
@@ -61,20 +61,20 @@ src/mistral_voice_mcp/
 | `mistral_set_context_bias` | Set terms for transcription accuracy (text or file) |
 | `mistral_get_context_bias` | Show configured bias terms |
 | `mistral_clear_context_bias` | Clear all bias terms |
+| `mistral_set_language` | Set transcription language (auto-disables timestamps for non-English) |
+| `mistral_get_language` | Show current language and timestamp status |
 | `mistral_list_inputs` | List audio files with transcription status |
 | `mistral_transcribe_file` | Transcribe a single file |
 | `mistral_transcribe_batch` | Transcribe all pending files |
 | `mistral_list_transcriptions` | List completed transcriptions |
 | `mistral_read_transcription` | Read a transcription result |
+| `mistral_save_processed` | Save a cleaned/processed transcript as *_clean.md |
 
 ## Prompts
 
 | Prompt | Purpose |
 |--------|---------|
-| `clean_transcript` | Remove filler words, fix grammar |
-| `meeting_notes` | Structure into attendees, topics, decisions, action items |
-| `summarize_transcript` | Concise summary by topic |
-| `technical_notes` | Extract technical terms, concepts, tools |
+| `clean_transcript` | Clean raw transcript: remove filler words, fix grammar and logic flow, save with mistral_save_processed |
 
 ## Documentation
 
