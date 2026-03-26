@@ -41,7 +41,7 @@ class TestContextBiasParsing:
     def test_from_file(self, workdir: Path):
         """Simulate reading terms from a text file."""
         wd = WorkDirectory(workdir)
-        bias_file = wd.input_dir / "my_terms.txt"
+        bias_file = wd.root / "my_terms.txt"
         bias_file.write_text("ORCA\nDFT\ntelazo piperazine\nUgi reaction\n")
 
         raw = bias_file.read_text()

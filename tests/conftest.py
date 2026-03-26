@@ -20,16 +20,16 @@ def example_audio() -> Path:
 
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
-    """Create a temporary work directory with input/ and output/ subdirs."""
-    (tmp_path / "input").mkdir()
-    (tmp_path / "output").mkdir()
+    """Create a temporary work directory with inbox/ and .staging/."""
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / ".staging").mkdir()
     return tmp_path
 
 
 @pytest.fixture
 def workdir_with_audio(workdir: Path, example_audio: Path) -> Path:
-    """Work directory with Example.mpeg copied into input/."""
-    shutil.copy2(example_audio, workdir / "input" / "Example.mpeg")
+    """Work directory with Example.mpeg copied into inbox/."""
+    shutil.copy2(example_audio, workdir / "inbox" / "Example.mpeg")
     return workdir
 
 

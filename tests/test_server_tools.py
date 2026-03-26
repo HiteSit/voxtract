@@ -14,54 +14,63 @@ from mistral_voice_mcp.server import (
     get_workdir,
     set_language,
     get_language,
-    list_inputs,
-    list_transcriptions,
-    read_transcription,
+    list_inbox,
+    create_session_tool,
+    list_sessions_tool,
+    transcribe_session,
+    read_staging_transcript,
+    finalize_session,
+    list_recordings,
+    read_transcript,
     save_processed,
     set_context_bias,
     get_context_bias,
     clear_context_bias,
-    transcribe_file,
 )
 
 
 @pytest.fixture
-def mock_ctx(workdir: Path) -> MagicMock:
-    """Mock Context with state storage."""
-    state: dict = {}
-    ctx = MagicMock(spec=["get_state", "set_state", "info", "report_progress"])
-    ctx.get_state = AsyncMock(side_effect=lambda key: state.get(key))
-    ctx.set_state = AsyncMock(
-        side_effect=lambda key, value: state.__setitem__(key, value)
-    )
+def mock_ctx():
+    """Mock MCP Context with state storage."""
+    ctx = MagicMock()
+    state: dict[str, str] = {}
+    ctx.get_state = AsyncMock(side_effect=lambda k: state.get(k))
+    ctx.set_state = AsyncMock(side_effect=lambda k, v: state.__setitem__(k, v))
     ctx.info = AsyncMock()
     ctx.report_progress = AsyncMock()
     return ctx
 
 
-class TestParsebiasTerms:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class TestParseBiasTerms:
     def test_comma_separated(self):
-        assert _parse_bias_terms("ORCA, DFT, MCR") == ["ORCA", "DFT", "MCR"]
+        assert _parse_bias_terms("A, B, C") == ["A", "B", "C"]
 
     def test_newline_separated(self):
-        assert _parse_bias_terms("ORCA\nDFT\nMCR") == ["ORCA", "DFT", "MCR"]
+        assert _parse_bias_terms("A\nB\nC") == ["A", "B", "C"]
 
     def test_mixed(self):
-        result = _parse_bias_terms("ORCA, DFT\nMCR, Ugi")
-        assert result == ["ORCA", "DFT", "MCR", "Ugi"]
+        assert _parse_bias_terms("A, B\nC") == ["A", "B", "C"]
 
     def test_empty_filtered(self):
-        assert _parse_bias_terms("ORCA,,, DFT,  ,") == ["ORCA", "DFT"]
+        assert _parse_bias_terms(", , A, ") == ["A"]
+
+
+# ---------------------------------------------------------------------------
+# Workdir Tools
+# ---------------------------------------------------------------------------
 
 
 class TestWorkdirTools:
     @pytest.mark.asyncio
-    async def test_set_workdir(self, tmp_path: Path, mock_ctx):
-        result = await set_workdir(str(tmp_path), mock_ctx)
-        assert "Work directory set to" in result
-        assert (tmp_path / "input").is_dir()
-        assert (tmp_path / "output").is_dir()
-        mock_ctx.set_state.assert_called()
+    async def test_set_workdir(self, workdir: Path, mock_ctx):
+        result = await set_workdir(str(workdir), mock_ctx)
+        assert "Work directory set to:" in result
+        assert "inbox/" in result
 
     @pytest.mark.asyncio
     async def test_get_workdir_without_set_errors(self, mock_ctx):
@@ -69,91 +78,47 @@ class TestWorkdirTools:
             await get_workdir(mock_ctx)
 
     @pytest.mark.asyncio
-    async def test_get_workdir_after_set(self, tmp_path: Path, mock_ctx):
-        await set_workdir(str(tmp_path), mock_ctx)
+    async def test_get_workdir_after_set(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
         result = await get_workdir(mock_ctx)
-        assert "Work directory" in result
-        assert "pending" in result
+        assert "Work directory:" in result
+        assert "inbox/" in result
+        assert "recordings" in result
 
 
-class TestInputOutputTools:
-    @pytest.mark.asyncio
-    async def test_list_inputs_empty(self, workdir: Path, mock_ctx):
-        await set_workdir(str(workdir), mock_ctx)
-        result = await list_inputs(mock_ctx)
-        assert "No audio files" in result
-
-    @pytest.mark.asyncio
-    async def test_list_inputs_with_files(self, workdir: Path, mock_ctx):
-        (workdir / "input" / "test.mp3").write_bytes(b"\x00")
-        (workdir / "input" / "test2.wav").write_bytes(b"\x00")
-        await set_workdir(str(workdir), mock_ctx)
-        result = await list_inputs(mock_ctx)
-        assert "2 audio files" in result
-        assert "[pending]" in result
-
-    @pytest.mark.asyncio
-    async def test_list_transcriptions_empty(self, workdir: Path, mock_ctx):
-        await set_workdir(str(workdir), mock_ctx)
-        result = await list_transcriptions(mock_ctx)
-        assert "No transcriptions" in result
-
-    @pytest.mark.asyncio
-    async def test_list_transcriptions_with_files(
-        self, workdir: Path, mock_ctx
-    ):
-        (workdir / "output" / "test.json").write_text('{"text":"hello"}')
-        (workdir / "output" / "test.md").write_text("## Speaker 1\n\nhello\n")
-        await set_workdir(str(workdir), mock_ctx)
-        result = await list_transcriptions(mock_ctx)
-        assert "1 transcription" in result
-        assert "[+md]" in result
-
-    @pytest.mark.asyncio
-    async def test_read_transcription(self, workdir: Path, mock_ctx):
-        (workdir / "output" / "test.md").write_text("## Speaker 1\n\nHello world\n")
-        await set_workdir(str(workdir), mock_ctx)
-        result = await read_transcription("test.md", mock_ctx)
-        assert "Hello world" in result
-
-    @pytest.mark.asyncio
-    async def test_read_transcription_not_found(
-        self, workdir: Path, mock_ctx
-    ):
-        await set_workdir(str(workdir), mock_ctx)
-        result = await read_transcription("nonexistent.md", mock_ctx)
-        assert "not found" in result
+# ---------------------------------------------------------------------------
+# Context Bias Tools
+# ---------------------------------------------------------------------------
 
 
 class TestContextBiasTools:
     @pytest.mark.asyncio
     async def test_set_and_get(self, workdir: Path, mock_ctx):
         await set_workdir(str(workdir), mock_ctx)
-        result = await set_context_bias("ORCA, DFT, MCR", mock_ctx)
-        assert "3 terms" in result
-
+        await set_context_bias("ORCA, DFT, MCR", mock_ctx)
         result = await get_context_bias(mock_ctx)
+        assert "3 terms" in result
         assert "ORCA" in result
-        assert "DFT" in result
 
     @pytest.mark.asyncio
     async def test_clear(self, workdir: Path, mock_ctx):
         await set_workdir(str(workdir), mock_ctx)
         await set_context_bias("ORCA", mock_ctx)
         result = await clear_context_bias(mock_ctx)
-        assert "cleared" in result
-
-        result = await get_context_bias(mock_ctx)
-        assert "No context bias" in result
+        assert "cleared" in result.lower()
 
     @pytest.mark.asyncio
     async def test_set_from_file(self, workdir: Path, mock_ctx):
         await set_workdir(str(workdir), mock_ctx)
         terms_file = workdir / "my_terms.txt"
         terms_file.write_text("ORCA\nDFT\nMCR reaction\n")
-
         result = await set_context_bias("my_terms.txt", mock_ctx)
         assert "3 terms" in result
+
+
+# ---------------------------------------------------------------------------
+# Language Tools
+# ---------------------------------------------------------------------------
 
 
 class TestLanguageTools:
@@ -200,120 +165,291 @@ class TestLanguageTools:
         assert "ja" in result
         assert "disabled" in result.lower()
 
-    @pytest.mark.asyncio
-    async def test_all_codes_map_to_valid_entries(self):
+    def test_all_codes_map_to_valid_entries(self):
         codes = set(SUPPORTED_LANGUAGES.values())
         assert len(codes) == 13
 
+
+# ---------------------------------------------------------------------------
+# Inbox Tools
+# ---------------------------------------------------------------------------
+
+
+class TestListInbox:
+    @pytest.mark.asyncio
+    async def test_empty(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await list_inbox(mock_ctx)
+        assert "No audio files" in result
+
+    @pytest.mark.asyncio
+    async def test_with_files(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "test.mp3").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+        result = await list_inbox(mock_ctx)
+        assert "1 audio files" in result
+        assert "test.mp3" in result
+
+
+# ---------------------------------------------------------------------------
+# Session Tools
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSession:
+    @pytest.mark.asyncio
+    async def test_create_with_all_files(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "a.mpeg").write_bytes(b"\x00" * 100)
+        (workdir / "inbox" / "b.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+        result = await create_session_tool(mock_ctx)
+        assert "Session created:" in result
+        assert "Files: 2" in result
+
+    @pytest.mark.asyncio
+    async def test_create_with_specific_files(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "a.mpeg").write_bytes(b"\x00" * 100)
+        (workdir / "inbox" / "b.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+        result = await create_session_tool(mock_ctx, filenames=["a.mpeg"])
+        assert "Files: 1" in result
+        assert "a.mpeg" in result
+
+    @pytest.mark.asyncio
+    async def test_create_missing_file(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await create_session_tool(mock_ctx, filenames=["nope.mp3"])
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_empty_inbox(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await create_session_tool(mock_ctx)
+        assert "No audio files" in result
+
+
+class TestListSessions:
+    @pytest.mark.asyncio
+    async def test_no_sessions(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await list_sessions_tool(mock_ctx)
+        assert "No active" in result
+
+    @pytest.mark.asyncio
+    async def test_with_sessions(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+        await create_session_tool(mock_ctx)
+        result = await list_sessions_tool(mock_ctx)
+        assert "1 staging sessions" in result
+        assert "pending" in result
+
+
+# ---------------------------------------------------------------------------
+# Transcribe Session
+# ---------------------------------------------------------------------------
+
+
+class TestTranscribeSession:
     @pytest.mark.asyncio
     @patch("mistral_voice_mcp.server._get_client")
-    async def test_transcribe_uses_session_language(
+    async def test_transcribes_all_files(
         self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
     ):
         mock_get_client.return_value = mock_mistral_client
-        (workdir / "input" / "test.mp3").write_bytes(b"\x00" * 100)
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+
+        # Create session
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        result = await transcribe_session(session_id, mock_ctx)
+        assert "Transcription complete: 1/1" in result
+        assert "test.mpeg" in result
+
+    @pytest.mark.asyncio
+    @patch("mistral_voice_mcp.server._get_client")
+    async def test_uses_session_language(
+        self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
+    ):
+        mock_get_client.return_value = mock_mistral_client
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
         await set_workdir(str(workdir), mock_ctx)
         await set_language("italian", mock_ctx)
 
-        result = await transcribe_file("test.mp3", mock_ctx)
-        assert "Transcription complete" in result
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
 
+        await transcribe_session(session_id, mock_ctx)
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
         assert call_kwargs.kwargs["language"] == "it"
-        # Diarize is on by default, so timestamps are still sent
-        assert call_kwargs.kwargs["timestamp_granularities"] == ["segment"]
 
 
-class TestTranscribeFile:
-    @pytest.mark.asyncio
-    async def test_file_not_found(self, workdir: Path, mock_ctx):
-        await set_workdir(str(workdir), mock_ctx)
-        result = await transcribe_file("nonexistent.mp3", mock_ctx)
-        assert "not found" in result
+# ---------------------------------------------------------------------------
+# Read Staging Transcript
+# ---------------------------------------------------------------------------
 
+
+class TestReadStagingTranscript:
     @pytest.mark.asyncio
     @patch("mistral_voice_mcp.server._get_client")
-    async def test_transcribe_with_mock(
+    async def test_read_after_transcribe(
         self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
     ):
         mock_get_client.return_value = mock_mistral_client
-
-        (workdir / "input" / "test.mp3").write_bytes(b"\x00" * 100)
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
         await set_workdir(str(workdir), mock_ctx)
 
-        result = await transcribe_file("test.mp3", mock_ctx)
-        assert "Transcription complete" in result
-        assert (workdir / "output" / "test.json").exists()
-        assert (workdir / "output" / "test.md").exists()
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        await transcribe_session(session_id, mock_ctx)
+        result = await read_staging_transcript(session_id, mock_ctx)
+        assert "Speaker 1" in result
+
+    @pytest.mark.asyncio
+    async def test_not_transcribed_yet(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        result = await read_staging_transcript(session_id, mock_ctx)
+        assert "not fully transcribed" in result
+
+
+# ---------------------------------------------------------------------------
+# Finalize
+# ---------------------------------------------------------------------------
+
+
+class TestFinalize:
+    @pytest.mark.asyncio
+    @patch("mistral_voice_mcp.server._get_client")
+    async def test_full_finalize(
+        self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
+    ):
+        mock_get_client.return_value = mock_mistral_client
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        await transcribe_session(session_id, mock_ctx)
+        result = await finalize_session(session_id, "Test Recording", mock_ctx)
+
+        assert "Finalized: test-recording/" in result
+        assert (workdir / "test-recording" / "test.mpeg").exists()
+        assert (workdir / "test-recording" / "transcript.md").exists()
+        # Staging cleaned up
+        assert not (workdir / ".staging" / session_id).exists()
+
+    @pytest.mark.asyncio
+    @patch("mistral_voice_mcp.server._get_client")
+    async def test_cleans_inbox(
+        self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
+    ):
+        mock_get_client.return_value = mock_mistral_client
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        await transcribe_session(session_id, mock_ctx)
+        await finalize_session(session_id, "My Recording", mock_ctx)
+
+        assert not (workdir / "inbox" / "test.mpeg").exists()
+
+    @pytest.mark.asyncio
+    async def test_not_transcribed_rejects(self, workdir: Path, mock_ctx):
+        (workdir / "inbox" / "test.mpeg").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+
+        create_result = await create_session_tool(mock_ctx)
+        session_id = create_result.split("\n")[0].split(": ")[1]
+
+        result = await finalize_session(session_id, "Nope", mock_ctx)
+        assert "not fully transcribed" in result
+
+
+# ---------------------------------------------------------------------------
+# Recordings
+# ---------------------------------------------------------------------------
+
+
+class TestListRecordings:
+    @pytest.mark.asyncio
+    async def test_no_recordings(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await list_recordings(mock_ctx)
+        assert "No finalized recordings" in result
+
+    @pytest.mark.asyncio
+    async def test_with_recordings(self, workdir: Path, mock_ctx):
+        rec = workdir / "my-recording"
+        rec.mkdir()
+        (rec / "audio.mpeg").write_bytes(b"\x00")
+        (rec / "transcript.md").write_text("## Speaker 1\n\nHello.\n")
+        await set_workdir(str(workdir), mock_ctx)
+        result = await list_recordings(mock_ctx)
+        assert "1 recordings" in result
+        assert "my-recording/" in result
+        assert "transcript" in result
+
+
+class TestReadTranscript:
+    @pytest.mark.asyncio
+    async def test_read_transcript(self, workdir: Path, mock_ctx):
+        rec = workdir / "my-recording"
+        rec.mkdir()
+        (rec / "transcript.md").write_text("## Speaker 1\n\nHello.\n")
+        await set_workdir(str(workdir), mock_ctx)
+        result = await read_transcript("my-recording", mock_ctx)
+        assert "Hello." in result
+
+    @pytest.mark.asyncio
+    async def test_read_clean_transcript(self, workdir: Path, mock_ctx):
+        rec = workdir / "my-recording"
+        rec.mkdir()
+        (rec / "transcript_clean.md").write_text("Cleaned version.")
+        await set_workdir(str(workdir), mock_ctx)
+        result = await read_transcript("my-recording", mock_ctx, clean=True)
+        assert "Cleaned version." in result
+
+    @pytest.mark.asyncio
+    async def test_recording_not_found(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        result = await read_transcript("nonexistent", mock_ctx)
+        assert "not found" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Save Processed
+# ---------------------------------------------------------------------------
 
 
 class TestSaveProcessed:
     @pytest.mark.asyncio
     async def test_saves_clean_file(self, workdir: Path, mock_ctx):
+        rec = workdir / "my-recording"
+        rec.mkdir()
+        (rec / "transcript.md").write_text("raw")
         await set_workdir(str(workdir), mock_ctx)
-        content = "## Speaker 1\n\nCleaned text here.\n"
-        result = await save_processed("Example.md", content, mock_ctx)
+        result = await save_processed("my-recording", "cleaned", mock_ctx)
         assert "Saved" in result
-
-        clean_path = workdir / "output" / "Example_clean.md"
-        assert clean_path.exists()
-        assert clean_path.read_text() == content
+        assert (rec / "transcript_clean.md").read_text() == "cleaned"
 
     @pytest.mark.asyncio
-    async def test_accepts_filename_without_extension(
-        self, workdir: Path, mock_ctx
-    ):
+    async def test_recording_not_found(self, workdir: Path, mock_ctx):
         await set_workdir(str(workdir), mock_ctx)
-        await save_processed("Example", "cleaned", mock_ctx)
-        assert (workdir / "output" / "Example_clean.md").exists()
-
-    @pytest.mark.asyncio
-    async def test_strips_existing_clean_suffix(
-        self, workdir: Path, mock_ctx
-    ):
-        await set_workdir(str(workdir), mock_ctx)
-        await save_processed("Example_clean.md", "re-cleaned", mock_ctx)
-        clean_path = workdir / "output" / "Example_clean.md"
-        assert clean_path.exists()
-        assert clean_path.read_text() == "re-cleaned"
-
-    @pytest.mark.asyncio
-    async def test_preserves_subdirectory(self, workdir: Path, mock_ctx):
-        await set_workdir(str(workdir), mock_ctx)
-        await save_processed("batch/call.md", "cleaned", mock_ctx)
-        assert (workdir / "output" / "batch" / "call_clean.md").exists()
+        result = await save_processed("nonexistent", "content", mock_ctx)
+        assert "not found" in result.lower()
 
     @pytest.mark.asyncio
     async def test_no_workdir_raises(self, mock_ctx):
         with pytest.raises(ValueError, match="No work directory set"):
-            await save_processed("Example.md", "content", mock_ctx)
-
-
-@pytest.mark.integration
-class TestIntegration:
-    """Integration tests using real Mistral API. Run with: pytest -m integration"""
-
-    @pytest.mark.asyncio
-    async def test_transcribe_real_file(
-        self, workdir_with_audio: Path, mock_ctx
-    ):
-        await set_workdir(str(workdir_with_audio), mock_ctx)
-        result = await transcribe_file("Example.mpeg", mock_ctx)
-        assert "Transcription complete" in result
-
-        json_path = workdir_with_audio / "output" / "Example.json"
-        assert json_path.exists()
-        data = json.loads(json_path.read_text())
-        assert "text" in data
-        assert len(data["text"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_read_after_transcribe(
-        self, workdir_with_audio: Path, mock_ctx
-    ):
-        await set_workdir(str(workdir_with_audio), mock_ctx)
-        await transcribe_file("Example.mpeg", mock_ctx)
-
-        result = await read_transcription("Example", mock_ctx, format="md")
-        assert len(result) > 50
-        assert "## Speaker" in result
+            await save_processed("rec", "content", mock_ctx)

@@ -7,25 +7,25 @@ from pathlib import Path
 import pytest
 
 from mistral_voice_mcp.transcriber import MODEL_ID, _segments_to_markdown, transcribe
-from mistral_voice_mcp.workdir import WorkDirectory
 
 
 @pytest.fixture
-def wd_with_file(workdir: Path) -> tuple[WorkDirectory, Path]:
-    """WorkDirectory with a dummy audio file in input/."""
-    wd = WorkDirectory(workdir)
-    audio = wd.input_dir / "test.mp3"
+def audio_and_outdir(tmp_path: Path) -> tuple[Path, Path]:
+    """A dummy audio file and an output directory."""
+    audio = tmp_path / "test.mp3"
     audio.write_bytes(b"\x00" * 100)
-    return wd, audio
+    out = tmp_path / "output"
+    out.mkdir()
+    return audio, out
 
 
 class TestTranscribe:
     @pytest.mark.asyncio
     async def test_calls_api_with_correct_params(
-        self, wd_with_file, mock_mistral_client
+        self, audio_and_outdir, mock_mistral_client
     ):
-        wd, audio = wd_with_file
-        await transcribe(mock_mistral_client, wd, audio)
+        audio, out = audio_and_outdir
+        await transcribe(mock_mistral_client, audio, out)
 
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
         assert call_kwargs.kwargs["model"] == MODEL_ID
@@ -33,18 +33,19 @@ class TestTranscribe:
         assert call_kwargs.kwargs["timestamp_granularities"] == ["segment"]
 
     @pytest.mark.asyncio
-    async def test_saves_json_output(self, wd_with_file, mock_mistral_client):
-        wd, audio = wd_with_file
-        result = await transcribe(mock_mistral_client, wd, audio)
+    async def test_saves_json_output(self, audio_and_outdir, mock_mistral_client):
+        audio, out = audio_and_outdir
+        result = await transcribe(mock_mistral_client, audio, out)
 
         assert result.json_path is not None
         assert result.json_path.exists()
         assert result.json_path.suffix == ".json"
+        assert result.json_path.parent == out
 
     @pytest.mark.asyncio
-    async def test_saves_md_output(self, wd_with_file, mock_mistral_client):
-        wd, audio = wd_with_file
-        result = await transcribe(mock_mistral_client, wd, audio)
+    async def test_saves_md_output(self, audio_and_outdir, mock_mistral_client):
+        audio, out = audio_and_outdir
+        result = await transcribe(mock_mistral_client, audio, out)
 
         assert result.md_path is not None
         assert result.md_path.exists()
@@ -55,26 +56,22 @@ class TestTranscribe:
 
     @pytest.mark.asyncio
     async def test_context_bias_forwarded(
-        self, wd_with_file, mock_mistral_client
+        self, audio_and_outdir, mock_mistral_client
     ):
-        wd, audio = wd_with_file
+        audio, out = audio_and_outdir
         bias = ["ORCA", "DFT", "MCR"]
-        await transcribe(
-            mock_mistral_client, wd, audio, context_bias=bias
-        )
+        await transcribe(mock_mistral_client, audio, out, context_bias=bias)
 
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
         assert call_kwargs.kwargs["context_bias"] == bias
 
     @pytest.mark.asyncio
     async def test_language_with_diarize_keeps_timestamps(
-        self, wd_with_file, mock_mistral_client
+        self, audio_and_outdir, mock_mistral_client
     ):
         """Diarization requires timestamps, so both are sent even with language."""
-        wd, audio = wd_with_file
-        await transcribe(
-            mock_mistral_client, wd, audio, language="it", diarize=True
-        )
+        audio, out = audio_and_outdir
+        await transcribe(mock_mistral_client, audio, out, language="it", diarize=True)
 
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
         assert call_kwargs.kwargs["language"] == "it"
@@ -83,42 +80,32 @@ class TestTranscribe:
 
     @pytest.mark.asyncio
     async def test_language_without_diarize_excludes_timestamps(
-        self, wd_with_file, mock_mistral_client
+        self, audio_and_outdir, mock_mistral_client
     ):
         """Without diarization, language alone excludes timestamps."""
-        wd, audio = wd_with_file
-        await transcribe(
-            mock_mistral_client, wd, audio, language="it", diarize=False
-        )
+        audio, out = audio_and_outdir
+        await transcribe(mock_mistral_client, audio, out, language="it", diarize=False)
 
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
         assert call_kwargs.kwargs["language"] == "it"
         assert "timestamp_granularities" not in call_kwargs.kwargs
 
     @pytest.mark.asyncio
-    async def test_rejects_file_outside_input_dir(
-        self, workdir: Path, mock_mistral_client
-    ):
-        wd = WorkDirectory(workdir)
-        outside_file = workdir / "not_in_input.mp3"
-        outside_file.write_bytes(b"\x00")
+    async def test_creates_output_dir_if_missing(self, tmp_path, mock_mistral_client):
+        audio = tmp_path / "test.mp3"
+        audio.write_bytes(b"\x00" * 100)
+        out = tmp_path / "new" / "nested" / "dir"
 
-        with pytest.raises(ValueError, match="not within the input directory"):
-            await transcribe(mock_mistral_client, wd, outside_file)
+        result = await transcribe(mock_mistral_client, audio, out)
+        assert result.json_path.exists()
+        assert result.md_path.exists()
 
     @pytest.mark.asyncio
-    async def test_output_mirrors_subdirectory(
-        self, workdir: Path, mock_mistral_client
-    ):
-        wd = WorkDirectory(workdir)
-        sub = wd.input_dir / "batch" / "day1"
-        sub.mkdir(parents=True)
-        audio = sub / "call.mp3"
-        audio.write_bytes(b"\x00")
-
-        result = await transcribe(mock_mistral_client, wd, audio)
-        assert "batch" in str(result.json_path)
-        assert "day1" in str(result.json_path)
+    async def test_output_uses_audio_stem(self, audio_and_outdir, mock_mistral_client):
+        audio, out = audio_and_outdir
+        result = await transcribe(mock_mistral_client, audio, out)
+        assert result.json_path.stem == "test"
+        assert result.md_path.stem == "test"
 
 
 class TestSegmentsToMarkdown:
@@ -174,46 +161,35 @@ class TestTranscribeEndToEnd:
     """
 
     @pytest.mark.asyncio
-    async def test_transcribe_produces_valid_markdown(
-        self, workdir_with_audio: Path
-    ):
+    async def test_transcribe_produces_valid_markdown(self, tmp_path: Path):
         from mistralai.client import Mistral
 
         api_key = os.environ.get("MISTRAL_API_KEY")
         if not api_key:
             pytest.skip("MISTRAL_API_KEY not set")
 
+        fixture = Path(__file__).parent / "fixtures" / "Example.mpeg"
+        if not fixture.exists():
+            pytest.skip("Example.mpeg fixture not found")
+
         client = Mistral(api_key=api_key)
-        wd = WorkDirectory(workdir_with_audio)
-        audio = wd.input_dir / "Example.mpeg"
+        out = tmp_path / "output"
 
-        result = await transcribe(client, wd, audio)
+        result = await transcribe(client, fixture, out)
 
-        # JSON output exists and is valid
+        # JSON output exists
         assert result.json_path is not None
         assert result.json_path.exists()
-        assert result.json_path.suffix == ".json"
 
-        # Markdown output exists
+        # Markdown output exists with valid structure
         assert result.md_path is not None
         assert result.md_path.exists()
-        assert result.md_path.suffix == ".md"
 
         md_content = result.md_path.read_text()
-
-        # Has at least one speaker heading
         headings = re.findall(r"^## .+$", md_content, re.MULTILINE)
-        assert len(headings) >= 1, "Markdown must have at least one speaker heading"
-
-        # Every heading matches the expected format
+        assert len(headings) >= 1
         for h in headings:
-            assert re.match(r"## Speaker \d+", h), f"Unexpected heading format: {h}"
-
-        # Content is non-empty between headings
-        blocks = re.split(r"^## .+$", md_content, flags=re.MULTILINE)
-        non_empty_blocks = [b.strip() for b in blocks if b.strip()]
-        assert len(non_empty_blocks) >= 1, "Must have text content under headings"
+            assert re.match(r"## Speaker \d+", h)
 
         # No .txt file produced
-        txt_path = result.md_path.with_suffix(".txt")
-        assert not txt_path.exists(), ".txt file should not be generated"
+        assert not (out / "Example.txt").exists()

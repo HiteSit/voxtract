@@ -36,3 +36,8 @@ class TestCleanTranscriptPrompt:
         msgs = clean_transcript_messages(SAMPLE_TRANSCRIPT)
         content = msgs[0]["content"]
         assert "not add information" in content.lower() or "do not add" in content.lower()
+
+    def test_instructs_to_preserve_part_headers(self):
+        msgs = clean_transcript_messages(SAMPLE_TRANSCRIPT)
+        content = msgs[0]["content"]
+        assert "# Part:" in content
