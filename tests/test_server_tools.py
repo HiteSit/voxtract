@@ -8,9 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mistral_voice_mcp.server import (
+    SUPPORTED_LANGUAGES,
     _parse_bias_terms,
     set_workdir,
     get_workdir,
+    set_language,
+    get_language,
     list_inputs,
     list_transcriptions,
     read_transcription,
@@ -151,6 +154,74 @@ class TestContextBiasTools:
 
         result = await set_context_bias("my_terms.txt", mock_ctx)
         assert "3 terms" in result
+
+
+class TestLanguageTools:
+    @pytest.mark.asyncio
+    async def test_default_is_english(self, mock_ctx):
+        result = await get_language(mock_ctx)
+        assert "english" in result.lower()
+        assert "en" in result
+        assert "enabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_set_by_name(self, mock_ctx):
+        result = await set_language("italian", mock_ctx)
+        assert "it" in result
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_set_by_code(self, mock_ctx):
+        result = await set_language("fr", mock_ctx)
+        assert "fr" in result
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_set_english_enables_timestamps(self, mock_ctx):
+        await set_language("italian", mock_ctx)
+        result = await set_language("english", mock_ctx)
+        assert "enabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_case_insensitive(self, mock_ctx):
+        result = await set_language("GERMAN", mock_ctx)
+        assert "de" in result
+
+    @pytest.mark.asyncio
+    async def test_unsupported_language_rejected(self, mock_ctx):
+        result = await set_language("klingon", mock_ctx)
+        assert "Unsupported" in result
+
+    @pytest.mark.asyncio
+    async def test_get_after_set(self, mock_ctx):
+        await set_language("japanese", mock_ctx)
+        result = await get_language(mock_ctx)
+        assert "japanese" in result.lower()
+        assert "ja" in result
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_all_codes_map_to_valid_entries(self):
+        codes = set(SUPPORTED_LANGUAGES.values())
+        assert len(codes) == 13
+
+    @pytest.mark.asyncio
+    @patch("mistral_voice_mcp.server._get_client")
+    async def test_transcribe_uses_session_language(
+        self, mock_get_client, workdir: Path, mock_ctx, mock_mistral_client
+    ):
+        mock_get_client.return_value = mock_mistral_client
+        (workdir / "input" / "test.mp3").write_bytes(b"\x00" * 100)
+        await set_workdir(str(workdir), mock_ctx)
+        await set_language("italian", mock_ctx)
+
+        result = await transcribe_file("test.mp3", mock_ctx)
+        assert "Transcription complete" in result
+
+        call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
+        assert call_kwargs.kwargs["language"] == "it"
+        # Diarize is on by default, so timestamps are still sent
+        assert call_kwargs.kwargs["timestamp_granularities"] == ["segment"]
 
 
 class TestTranscribeFile:

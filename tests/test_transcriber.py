@@ -67,16 +67,32 @@ class TestTranscribe:
         assert call_kwargs.kwargs["context_bias"] == bias
 
     @pytest.mark.asyncio
-    async def test_language_excludes_timestamps(
+    async def test_language_with_diarize_keeps_timestamps(
         self, wd_with_file, mock_mistral_client
     ):
+        """Diarization requires timestamps, so both are sent even with language."""
         wd, audio = wd_with_file
         await transcribe(
-            mock_mistral_client, wd, audio, language="en"
+            mock_mistral_client, wd, audio, language="it", diarize=True
         )
 
         call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
-        assert call_kwargs.kwargs["language"] == "en"
+        assert call_kwargs.kwargs["language"] == "it"
+        assert call_kwargs.kwargs["timestamp_granularities"] == ["segment"]
+        assert call_kwargs.kwargs["diarize"] is True
+
+    @pytest.mark.asyncio
+    async def test_language_without_diarize_excludes_timestamps(
+        self, wd_with_file, mock_mistral_client
+    ):
+        """Without diarization, language alone excludes timestamps."""
+        wd, audio = wd_with_file
+        await transcribe(
+            mock_mistral_client, wd, audio, language="it", diarize=False
+        )
+
+        call_kwargs = mock_mistral_client.audio.transcriptions.complete_async.call_args
+        assert call_kwargs.kwargs["language"] == "it"
         assert "timestamp_granularities" not in call_kwargs.kwargs
 
     @pytest.mark.asyncio
