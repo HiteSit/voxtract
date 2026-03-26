@@ -1,8 +1,8 @@
-# Mistral Voice MCP Server
+# Voxtract
 
 ## Aim
 
-MCP server for audio transcription using Mistral's **Voxtral Mini Transcribe 2** (`voxtral-mini-2602`).
+MCP server for extracting structured knowledge from voice recordings, powered by Mistral's **Voxtral Mini Transcribe 2** (`voxtral-mini-2602`).
 Provides a session-based workflow: drop audio in inbox, transcribe to staging, review,
 then finalize into a named recording directory with merged transcript.
 
@@ -18,7 +18,7 @@ then finalize into a named recording directory with merged transcript.
 
 ```bash
 # Start the MCP server (stdio transport)
-uv run mistral-voice-mcp
+uv run voxtract
 
 # Or directly
 uv run python src/mistral_voice_mcp/server.py
@@ -103,7 +103,7 @@ workdir/
 
 ## Documentation
 
-Reference docs in `docs/`:
+Reference docs in `package_docs/` (gitignored, not distributed):
 - `01_offline_transcription.md` - API usage and code examples
 - `02_voxtral_transcribe_2_announcement.md` - Model capabilities, benchmarks, pricing
 - `03_voxtral_mini_transcribe_model.md` - Model reference card

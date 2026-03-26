@@ -1,16 +1,21 @@
 [project]
-name = "mistral-voice-mcp"
+name = "voxtract"
 version = "0.1.0"
-description = "MCP server for audio transcription using Mistral Voxtral Mini Transcribe 2"
+description = "Extract structured knowledge from voice recordings. MCP server powered by Mistral transcription + Claude post-processing."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+keywords = ["mcp", "transcription", "voice", "audio", "mistral", "voxtral", "markdown"]
 dependencies = [
     "mistralai>=2.1.3",
     "fastmcp>=3.1.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/hitesit/voxtract"
+
 [project.scripts]
-mistral-voice-mcp = "mistral_voice_mcp.server:main"
+voxtract = "mistral_voice_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
