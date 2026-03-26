@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-03-26
+
+### Changed
+- Generalized README to be MCP-client agnostic (Claude Code, Claude Desktop, Cursor, Windsurf, etc.)
+
 ## [0.1.0] - 2026-03-26
 
 ### Added
@@ -20,5 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 16 MCP tools for the full transcription lifecycle
 - 129 unit tests + end-to-end test coverage
 
-[Unreleased]: https://github.com/HiteSit/voxtract/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/HiteSit/voxtract/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/HiteSit/voxtract/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/HiteSit/voxtract/releases/tag/v0.1.0

@@ -2,30 +2,30 @@
 
 Extract structured knowledge from voice recordings.
 
-Voxtract is an MCP server that transcribes audio files using Mistral's Voxtral model and lets Claude handle the post-processing — cleaning, restructuring, summarizing — all within your existing Claude subscription. No extra AI agents, no extra costs beyond Mistral transcription at **$0.003/minute**.
+Voxtract is an MCP server that transcribes audio files using Mistral's Voxtral model and lets your LLM agent handle the post-processing — cleaning, restructuring, summarizing — all within your existing setup. No extra AI agents, no extra costs beyond Mistral transcription at **$0.003/minute**.
 
 ## Why Voxtract?
 
 Dedicated voice-to-text products charge $80–180 for hardware plus monthly subscriptions for AI features. Voxtract takes a different approach:
 
 - **Mistral handles transcription** — $0.003/min (~$0.18/hour). Speaker diarization, 13 languages, context biasing for domain terms.
-- **Claude handles intelligence** — Your existing Claude subscription does the post-processing. No extra API costs. Cleaning, restructuring, meeting notes, idea extraction — whatever you need.
-- **MCP glues them together** — Voxtract runs as an MCP server inside Claude Code (or any MCP client). Claude calls the tools directly, reads the transcript, and processes it in the same conversation.
+- **Your LLM handles intelligence** — The agent you already use (Claude, GPT, etc.) does the post-processing. No extra API costs. Cleaning, restructuring, meeting notes, idea extraction — whatever you need.
+- **MCP glues them together** — Voxtract runs as an [MCP server](https://modelcontextprotocol.io/) inside any MCP-compatible client (Claude Code, Claude Desktop, Cursor, Windsurf, or any agent framework supporting MCP). The LLM calls the tools directly, reads the transcript, and processes it in the same conversation.
 
 The result: you record on your phone, drop the file in any project directory, and get organized markdown knowledge — for essentially free on top of what you already pay.
 
 ## How it works
 
 ```
-You speak → Audio file → Voxtract transcribes → Claude cleans & structures → Organized knowledge
+You speak → Audio file → Voxtract transcribes → LLM cleans & structures → Organized knowledge
 ```
 
 Voxtract uses a session-based workflow:
 
 1. Drop audio files in a working directory
 2. Voxtract transcribes them via Mistral and stages the results
-3. Claude reads the transcript, picks a descriptive name, and finalizes into a clean directory
-4. Optionally, Claude post-processes the transcript (clean up, restructure, extract ideas)
+3. The LLM reads the transcript, picks a descriptive name, and finalizes into a clean directory
+4. Optionally, the LLM post-processes the transcript (clean up, restructure, extract ideas)
 
 The output is a named directory with your audio and markdown:
 
@@ -43,7 +43,7 @@ Multiple audio files that belong to the same topic get merged into a single tran
 
 The real power is in what happens **after** transcription. Voxtract ships with a `clean_transcript` MCP prompt, but the architecture is designed to be **forked and customized**.
 
-The prompt templates live in a single file — `src/mistral_voice_mcp/prompts.py` — and each one is just a function that returns a message list. Want to turn Voxtract into a meeting assistant? A lecture note-taker? A medical dictation tool? **Write your own prompt function, register it in `server.py`, done.** Claude handles the rest.
+The prompt templates live in a single file — `src/mistral_voice_mcp/prompts.py` — and each one is just a function that returns a message list. Want to turn Voxtract into a meeting assistant? A lecture note-taker? A medical dictation tool? **Write your own prompt function, register it in `server.py`, done.** Your LLM handles the rest.
 
 ```python
 # src/mistral_voice_mcp/prompts.py — add your own
@@ -68,19 +68,19 @@ Some ideas for what you could build:
 - **Interview processor** → Q&A format with key quotes highlighted
 - **Brainstorm organizer** → Turn scattered spoken ideas into coherent proposals
 
-Since Claude is the post-processing engine and you're already paying for the subscription, each new use case costs you **zero extra** — just a new prompt function.
+Since the LLM you already use is the post-processing engine, each new use case costs you **zero extra** — just a new prompt function.
 
 ## Use it everywhere
 
-The idea is simple: add Voxtract to any repository where you work. Got an idea while walking? Record it, drop the file, and let Voxtract + Claude turn it into structured documentation — right next to your code, notes, or research.
+The idea is simple: add Voxtract to any repository where you work. Got an idea while walking? Record it, drop the file, and get structured documentation — right next to your code, notes, or research.
 
 ## Installation
 
-No cloning, no setup. Just add it to your Claude Code MCP config.
+No cloning, no setup. Just add it to your MCP client configuration.
 
 Requires [uv](https://docs.astral.sh/uv/) and a [Mistral API key](https://console.mistral.ai/) (pay-per-use, no subscription).
 
-Add this to your `.mcp.json` (project-level or global Claude Code settings):
+Add this to your MCP config (e.g., `.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude Desktop, or equivalent for your client):
 
 ```json
 {
@@ -101,14 +101,14 @@ That's it. `uvx` downloads, installs, and runs Voxtract in an isolated environme
 
 ## Quick start
 
-Once the MCP server is running in Claude Code:
+Once the MCP server is connected to your agent:
 
 ```
 You: Set the work directory to /path/to/my/project
      I dropped a voice memo in the inbox, transcribe it in Italian and clean it up
 ```
 
-Claude will:
+The agent will:
 1. Set the workdir, list the inbox
 2. Create a staging session, transcribe the audio
 3. Read the transcript, suggest a directory name
@@ -127,7 +127,7 @@ English, Chinese, Hindi, Spanish, Arabic, French, Portuguese, Russian, German, J
 
 ## Cost
 
-Mistral transcription: **$0.003 per minute** of audio. A 1-hour meeting costs ~$0.18. Post-processing via Claude is included in your existing subscription.
+Mistral transcription: **$0.003 per minute** of audio. A 1-hour meeting costs ~$0.18. Post-processing is handled by the LLM you already use — no additional cost.
 
 ## License
 
