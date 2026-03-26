@@ -219,10 +219,10 @@ async def list_transcriptions(ctx: Context) -> str:
     for f in json_files:
         rel = f.relative_to(wd.output_dir)
         size_kb = f.stat().st_size / 1024
-        txt_exists = f.with_suffix(".txt").exists()
+        md_exists = f.with_suffix(".md").exists()
         lines.append(
             f"  {rel} ({size_kb:.1f} KB)"
-            + (" [+txt]" if txt_exists else "")
+            + (" [+md]" if md_exists else "")
         )
     return "\n".join(lines)
 
@@ -242,7 +242,7 @@ async def read_transcription(
     """Read a specific transcription result.
 
     Args:
-        filename: Filename relative to output/ (e.g. 'Example.txt' or 'batch/call.json').
+        filename: Filename relative to output/ (e.g. 'Example.md' or 'batch/call.json').
         format: 'txt' for plain text or 'json' for full structured output.
     """
     wd = await _get_workdir(ctx)
@@ -317,7 +317,7 @@ async def transcribe_file(
         f"  Segments: {n_segments}\n"
         f"  Speakers: {len(speakers) if speakers else 'N/A'}\n"
         f"  Saved: {result.json_path}\n"
-        f"          {result.txt_path}"
+        f"          {result.md_path}"
     )
 
 

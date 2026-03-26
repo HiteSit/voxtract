@@ -21,7 +21,36 @@ class TranscriptionResult:
     usage: dict = field(default_factory=dict)
     model: str = MODEL_ID
     json_path: Path | None = None
-    txt_path: Path | None = None
+    md_path: Path | None = None
+
+
+def _segments_to_markdown(segments: list[dict]) -> str:
+    """Convert segments into speaker-grouped markdown.
+
+    Consecutive segments from the same speaker are concatenated under
+    a single ``## Speaker N`` heading.
+    """
+    if not segments:
+        return ""
+
+    blocks: list[tuple[str, str]] = []  # (speaker_label, text)
+    for seg in segments:
+        speaker = seg.get("speaker_id") or "unknown"
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        if blocks and blocks[-1][0] == speaker:
+            blocks[-1] = (speaker, blocks[-1][1] + " " + text)
+        else:
+            blocks.append((speaker, text))
+
+    lines: list[str] = []
+    for speaker, text in blocks:
+        label = speaker.replace("_", " ").title()
+        lines.append(f"## {label}\n")
+        lines.append(f"{text}\n")
+
+    return "\n".join(lines)
 
 
 async def transcribe(
@@ -77,24 +106,27 @@ async def transcribe(
         json.dumps(response.model_dump(), indent=2, default=str)
     )
 
-    # Save plain text output
-    txt_path = workdir.get_output_path(input_path, suffix=".txt")
-    txt_path.write_text(response.text)
+    # Build structured segments list
+    segments = [
+        {
+            "text": seg.text,
+            "start": seg.start,
+            "end": seg.end,
+            "speaker_id": getattr(seg, "speaker_id", None),
+        }
+        for seg in (response.segments or [])
+    ]
+
+    # Save markdown with speaker-grouped conversation format
+    md_path = workdir.get_output_path(input_path, suffix=".md")
+    md_path.write_text(_segments_to_markdown(segments))
 
     return TranscriptionResult(
         text=response.text,
-        segments=[
-            {
-                "text": seg.text,
-                "start": seg.start,
-                "end": seg.end,
-                "speaker_id": getattr(seg, "speaker_id", None),
-            }
-            for seg in (response.segments or [])
-        ],
+        segments=segments,
         language=response.language,
         usage=response.usage.model_dump() if hasattr(response.usage, "model_dump") else {},
         model=response.model,
         json_path=json_path,
-        txt_path=txt_path,
+        md_path=md_path,
     )
