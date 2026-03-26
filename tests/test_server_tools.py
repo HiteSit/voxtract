@@ -14,6 +14,7 @@ from mistral_voice_mcp.server import (
     list_inputs,
     list_transcriptions,
     read_transcription,
+    save_processed,
     set_context_bias,
     get_context_bias,
     clear_context_bias,
@@ -175,6 +176,48 @@ class TestTranscribeFile:
         assert (workdir / "output" / "test.md").exists()
 
 
+class TestSaveProcessed:
+    @pytest.mark.asyncio
+    async def test_saves_clean_file(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        content = "## Speaker 1\n\nCleaned text here.\n"
+        result = await save_processed("Example.md", content, mock_ctx)
+        assert "Saved" in result
+
+        clean_path = workdir / "output" / "Example_clean.md"
+        assert clean_path.exists()
+        assert clean_path.read_text() == content
+
+    @pytest.mark.asyncio
+    async def test_accepts_filename_without_extension(
+        self, workdir: Path, mock_ctx
+    ):
+        await set_workdir(str(workdir), mock_ctx)
+        await save_processed("Example", "cleaned", mock_ctx)
+        assert (workdir / "output" / "Example_clean.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_strips_existing_clean_suffix(
+        self, workdir: Path, mock_ctx
+    ):
+        await set_workdir(str(workdir), mock_ctx)
+        await save_processed("Example_clean.md", "re-cleaned", mock_ctx)
+        clean_path = workdir / "output" / "Example_clean.md"
+        assert clean_path.exists()
+        assert clean_path.read_text() == "re-cleaned"
+
+    @pytest.mark.asyncio
+    async def test_preserves_subdirectory(self, workdir: Path, mock_ctx):
+        await set_workdir(str(workdir), mock_ctx)
+        await save_processed("batch/call.md", "cleaned", mock_ctx)
+        assert (workdir / "output" / "batch" / "call_clean.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_no_workdir_raises(self, mock_ctx):
+        with pytest.raises(ValueError, match="No work directory set"):
+            await save_processed("Example.md", "content", mock_ctx)
+
+
 @pytest.mark.integration
 class TestIntegration:
     """Integration tests using real Mistral API. Run with: pytest -m integration"""
@@ -200,5 +243,6 @@ class TestIntegration:
         await set_workdir(str(workdir_with_audio), mock_ctx)
         await transcribe_file("Example.mpeg", mock_ctx)
 
-        result = await read_transcription("Example", mock_ctx, format="txt")
+        result = await read_transcription("Example", mock_ctx, format="md")
         assert len(result) > 50
+        assert "## Speaker" in result
